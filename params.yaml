@@ -1,0 +1,10 @@
+input: '/n/groups/kirschner/Will/BedRest/ct_deconvolution/samplesheet.csv'
+outdir: '/n/groups/kirschner/Will/BedRest/ct_deconvolution'
+gtf: '/n/groups/kirschner/reference/human/hg38/gencode.v48.annotation.gtf'
+fasta: '/n/groups/kirschner/reference/human/hg38/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna'
+aligner: 'star_rsem'
+pseudo_aligner: 'kallisto'
+email: 'praefrontalis@gmail.com'
+multiqc_title: 'Bed Rest'
+gencode: true
+save_reference: true
