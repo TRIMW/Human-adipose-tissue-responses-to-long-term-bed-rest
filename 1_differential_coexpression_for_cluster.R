@@ -76,9 +76,9 @@ design_mat <- matrix(
 )
 
 # Reduce to TCA genes + top variable other genes (runtime scales with n_genes²)
-gene_vars <- apply(counts[other_genes, ], 1, var)
+gene_vars <- apply(counts, 1, var)
 top_hvg   <- names(sort(gene_vars, decreasing = TRUE))[1:min(N_HVG, length(gene_vars))]
-input_mat <- as.matrix(counts[c(tca_genes, top_hvg), ])
+input_mat <- as.matrix(counts[top_hvg, ])
 
 message(sprintf(
   "DGCA: %d genes × %d samples, %d permutations...",
@@ -101,33 +101,5 @@ dgca_res <- ddcorAll(
 
 
 fwrite(as.data.table(dgca_res), file.path(OUT_DIR, "dgca_all.csv"))
-
-# Column holding the (permutation-based) p-value differs by DGCA version
-pval_col <- intersect(c("empPVal", "pValDiff"), colnames(dgca_res))[1]
-padj_col <- intersect(c("pValDiff_adj", "empPVal_adj"), colnames(dgca_res))[1]
-message(sprintf("Using p-value column: '%s', adjusted: '%s'", pval_col, padj_col))
-
-# Keep only TCA × other_gene pairs; ensure TCA gene is always in Gene1
-tca_g1 <- dgca_res[dgca_res$Gene1 %in% tca_genes & !(dgca_res$Gene2 %in% tca_genes), ]
-
-tca_g2_raw <- dgca_res[dgca_res$Gene2 %in% tca_genes & !(dgca_res$Gene1 %in% tca_genes), ]
-tca_g2 <- tca_g2_raw
-tca_g2$Gene1 <- tca_g2_raw$Gene2   # cor1/cor2 are symmetric, no change needed
-tca_g2$Gene2 <- tca_g2_raw$Gene1
-
-tca_pairs <- rbind(tca_g1, tca_g2)
-tca_pairs <- tca_pairs[order(tca_pairs[[padj_col]]), ]
-
-fwrite(as.data.table(tca_pairs), file.path(OUT_DIR, "dgca_all_tca_pairs.csv"))
-
-for (tca in tca_genes) {
-  sub <- tca_pairs[tca_pairs$Gene1 == tca, ]
-  fwrite(as.data.table(sub[order(sub[[padj_col]]), ]),
-         file.path(OUT_DIR, paste0(tca, "_dgca.csv")))
-}
-
-message(sprintf("DGCA done. Significant pairs (adj.p<0.1): %d",
-                sum(tca_pairs[[padj_col]] < 0.1, na.rm = TRUE)))
-
 
 message(sprintf("Done. Output: %s", OUT_DIR))
