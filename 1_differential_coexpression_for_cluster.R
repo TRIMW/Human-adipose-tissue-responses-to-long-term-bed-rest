@@ -17,7 +17,6 @@
 #   tca_vs_insulin_perm.csv  — TCA gene × insulin permutation test (phenotype,
 #                              handled separately since DGCA is gene-gene only)
 
-setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 
 if (!requireNamespace("DGCA", quietly = TRUE))
   stop("Install DGCA: install.packages('DGCA')")
@@ -26,13 +25,39 @@ suppressPackageStartupMessages({
   library(DGCA)
   library(data.table)
 })
-if (!exists("counts")) source("analysis_preamble.R")
+
+message("Loading counts (TPM)...")
+
+# Helper: SRR_GSM_A1_POST_Homo_sapiens_RNA-Seq  →  A1_Post
+tpm_short_name <- function(x) {
+  p <- strsplit(x, "_")[[1]]
+  paste0(p[3], "_",
+         paste0(toupper(substr(p[4], 1, 1)), tolower(substr(p[4], 2, nchar(p[4])))))
+}
+
+tpm_raw_fp <- '/n/groups/kirschner/Will/BedRest/counts/rsem.merged.gene_tpm.tsv'
+tpm_raw    <- read.csv(tpm_raw_fp, sep="\t", row.names=1, check.names=FALSE)
+tpm_raw[["transcript_id(s)"]] <- NULL
+tpm_raw    <- tpm_raw[, !grepl("I2_POST", colnames(tpm_raw))]          # exclude outlier
+colnames(tpm_raw) <- sapply(colnames(tpm_raw), tpm_short_name)          # A1_Post, A1_Pre …
+rownames(tpm_raw) <- sapply(strsplit(rownames(tpm_raw), "\\."), `[[`, 1) # strip ENSEMBL version
+
+# Filter: keep genes with mean raw TPM >= 1 across all retained samples.
+# Genes below this threshold are dominated by Poisson counting noise;
+# log-transform does not stabilise their variance.
+keep    <- rowMeans(tpm_raw) >= 1
+tpm_raw <- tpm_raw[keep, ]
+message(sprintf("Genes after mean TPM >= 1 filter: %d", nrow(tpm_raw)))
+
+# Log2(TPM + 1): stabilises NB overdispersion for the retained expressed genes.
+counts <- log2(tpm_raw + 1)
+
 
 # ---- Parameters ----
-N_HVG  <- 5000   # other-gene candidates: top N most variable genes
+N_HVG  <- 10000   # other-gene candidates: top N most variable genes
                # runtime scales as N_HVG² × N_PERM — this is the main lever
-N_PERM <- 250    # permutations (use 1000 for final analysis)
-OUT_DIR <- "/Users/willtrim/Documents/projs/bedrest/outputs/1_differential_coexpression"
+N_PERM <- 500    # permutations (use 1000 for final analysis)
+OUT_DIR <- "/n/groups/kirschner/Will/BedRest/outputs/1_differential_coexpression"
 dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
 
 r_to_z <- function(r) 0.5 * log((1 + r) / (1 - r))
@@ -104,63 +129,5 @@ for (tca in tca_genes) {
 message(sprintf("DGCA done. Significant pairs (adj.p<0.1): %d",
                 sum(tca_pairs[[padj_col]] < 0.1, na.rm = TRUE)))
 
-# =====================================================================
-# PART 2: TCA gene × arterial insulin  (manual permutation)
-# DGCA only handles gene–gene pairs; phenotype correlations done here.
-# =====================================================================
-
-# Attach the correct insulin value to every sample
-all_cols  <- colnames(counts)
-is_post   <- grepl("_Post$", all_cols)
-part_ids  <- sub("_(Pre|Post)$", "", all_cols)
-
-rownames(pheno_post) <- pheno_post$Participant.ID
-rownames(pheno_pre)  <- pheno_pre$Participant.ID
-
-insulin_all <- ifelse(
-  is_post,
-  pheno_post[part_ids, "Art..Insulin..mIU.L."],
-  pheno_pre[ part_ids, "Art..Insulin..mIU.L."]
-)
-names(insulin_all) <- all_cols
-
-ok <- !is.na(insulin_all)   # samples with insulin data
-
-N_PERM <- 1000
-
-perm_one_tca <- function(expr_row) {
-  # Observed: correlation in Post vs Pre with insulin
-  r_post <- cor(expr_row[is_post & ok],  insulin_all[is_post & ok],
-                method = "pearson", use = "complete.obs")
-  r_pre  <- cor(expr_row[!is_post & ok], insulin_all[!is_post & ok],
-                method = "pearson", use = "complete.obs")
-  obs    <- r_to_z(clip(r_post)) - r_to_z(clip(r_pre))
-
-  # Permute condition labels (reshuffle which samples are "post")
-  perm_diffs <- replicate(N_PERM, {
-    perm_post <- sample(is_post)
-    rp <- cor(expr_row[perm_post & ok],  insulin_all[perm_post & ok],
-              method = "pearson", use = "complete.obs")
-    rr <- cor(expr_row[!perm_post & ok], insulin_all[!perm_post & ok],
-              method = "pearson", use = "complete.obs")
-    r_to_z(clip(rp)) - r_to_z(clip(rr))
-  })
-
-  p_val <- mean(abs(perm_diffs) >= abs(obs))
-
-  data.frame(r_pre = r_pre, r_post = r_post,
-             z_diff = obs, perm_p = p_val)
-}
-
-message("Permutation test: TCA genes × arterial insulin...")
-insulin_res <- do.call(rbind, lapply(tca_genes, function(tca) {
-  res <- perm_one_tca(as.numeric(counts[tca, ]))
-  cbind(tca_gene = tca, res)
-}))
-insulin_res$perm_p_adj <- p.adjust(insulin_res$perm_p, method = "BH")
-insulin_res <- insulin_res[order(insulin_res$perm_p), ]
-
-fwrite(as.data.table(insulin_res),
-       file.path(OUT_DIR, "tca_vs_insulin_perm.csv"))
 
 message(sprintf("Done. Output: %s", OUT_DIR))
